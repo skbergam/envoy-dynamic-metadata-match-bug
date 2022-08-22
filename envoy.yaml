@@ -1,0 +1,99 @@
+static_resources:
+  listeners:
+  - address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 10000
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          http_filters:
+          - name: envoy.filters.http.jwt_authn
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+              providers:
+                xyz-jwt:
+                  forward: false
+                  payload_in_metadata: jwt_payload
+                  from_headers:
+                  - name: x-jwt
+                  local_jwks:
+                    inline_string: '{
+                      "keys":
+                        [
+                          {
+                            "kty":"oct",
+                            "alg":"HS256",
+                            "use": "sig",
+                            "k": "WFla"
+                          }
+                        ]
+                    }'
+              rules:
+              - match:
+                  prefix: "/echo-service"
+                requires:
+                  requires_any:
+                    requirements:
+                    - provider_name: "xyz-jwt"
+                    - allow_missing: {}
+          - name: envoy.lua
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+              inline_code:  |
+                function envoy_on_request(request_handle)
+                  -- THIS APPEARS TO BE AN ENVOY BUG. IF WE DON'T HAVE THIS LINE, THE MATCHING ON DYNAMIC METADATA STOPS WORKING.
+                  -- Try commenting it out and then run `make start` and `make request` on separate terminal windows. Once it's
+                  -- commented out the first match is skipped so the second one with a 403 forbidden direct response is exercised.
+                  request_handle:headers():remove("A")
+                end
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/echo-service"
+                  dynamic_metadata:
+                    filter: envoy.filters.http.jwt_authn
+                    path:
+                      - key: jwt_payload
+                      - key: brandId
+                    value:
+                      string_match:
+                        exact: tracfone
+                route:
+                  cluster: web_service
+              - match:
+                  prefix: "/echo-service"
+                direct_response:
+                  status: 403
+                  body:
+                    inline_string: "Forbidden."
+  clusters:
+  - name: web_service
+    connect_timeout: 1s
+    type: STRICT_DNS
+    # Comment out the following line to test on v6 networks
+    lb_policy: round_robin
+    load_assignment:
+      cluster_name: web_service
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: web_service
+                port_value: 8080
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 8001

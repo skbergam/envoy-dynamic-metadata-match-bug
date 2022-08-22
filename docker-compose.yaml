@@ -1,0 +1,27 @@
+version: '3'
+services:
+  envoy:
+    image: envoyproxy/envoy-dev:latest
+    command: -c /etc/envoy/envoy.yaml
+    networks:
+      - envoymesh
+    ports:
+      - "10000:10000"
+      - "8001:8001"
+    expose:
+      - "10000"
+      - "8001"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml
+
+  web_service:
+    image: pahud/echo-http-request:latest
+    ports:
+      - "9000:8080"
+    expose:
+      - "9000"
+    networks:
+        - envoymesh
+
+networks:
+  envoymesh: {}
